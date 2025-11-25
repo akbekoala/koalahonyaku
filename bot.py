@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import discord
 from openai import OpenAI
@@ -12,7 +13,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # 翻訳を実行するチャンネルIDを入れる
 TARGET_CHANNEL_IDS = [
     1439316912646389822,
-    1423699794781536377
+    1423699794781536377,
 ]
 
 # ==========================
@@ -27,24 +28,56 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ==========================
+# 日本語 / 韓国語の簡易判定
+# ==========================
+def detect_lang(text: str) -> str:
+    """ざっくり日本語 / 韓国語 / その他 を判定する"""
+
+    # ひらがな・カタカナ・漢字が含まれていたら日本語とみなす
+    if re.search(r"[\u3040-\u30ff\u4e00-\u9faf]", text):
+        return "ja"
+
+    # ハングルが含まれていたら韓国語とみなす
+    if re.search(r"[\uac00-\ud7af]", text):
+        return "ko"
+
+    # それ以外は対象外
+    return "other"
+
+
+# ==========================
 # 自動 翻訳 関数（日本語⇔韓国語）
 # ==========================
-async def translate_ja_ko_auto(text: str) -> str:
+async def translate_ja_ko_auto(text: str, lang: str) -> str:
+    """
+    lang が 'ja' のとき: 日本語 → 韓国語
+    lang が 'ko' のとき: 韓国語 → 日本語
+    それ以外: そのまま返す
+    """
+
+    if lang == "ja":
+        system_content = (
+            "You are a professional translator from Japanese to Korean.\n"
+            "The user input will be in Japanese.\n"
+            "Translate it into natural, conversational Korean.\n"
+            "Respond with ONLY the translated Korean text."
+        )
+    elif lang == "ko":
+        system_content = (
+            "You are a professional translator from Korean to Japanese.\n"
+            "The user input will be in Korean.\n"
+            "Translate it into natural, conversational Japanese.\n"
+            "Respond with ONLY the translated Japanese text."
+        )
+    else:
+        # 対象外言語
+        return text
+
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",  # 高精度で安定
+            model="gpt-4o",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a translator for Japanese and Korean.\n"
-                        "1. Detect whether the user text is Japanese or Korean.\n"
-                        "2. If Japanese → translate to natural Korean.\n"
-                        "3. If Korean → translate to natural Japanese.\n"
-                        "4. If neither, return the text unchanged.\n"
-                        "Respond with ONLY the translation text."
-                    ),
-                },
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": text},
             ],
             temperature=0.1,
@@ -81,10 +114,15 @@ async def on_message(message):
     if not text:
         return
 
-    translated = await translate_ja_ko_auto(text)
+    # 日本語 / 韓国語 以外はそもそも翻訳しない
+    lang = detect_lang(text)
+    if lang == "other":
+        return
 
-    # 判定で翻訳されなかった場合は送らない
-    if translated == text:
+    translated = await translate_ja_ko_auto(text, lang)
+
+    # 念のため、翻訳結果が空なら送らない
+    if not translated:
         return
 
     try:
@@ -109,5 +147,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
